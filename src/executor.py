@@ -2,31 +2,18 @@ from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
 from a2a.types import (
-    Task,
-    TaskState,
-    UnsupportedOperationError,
-    InvalidRequestError,
+    TaskState, UnsupportedOperationError, InvalidRequestError,
 )
 from a2a.utils.errors import ServerError
-from a2a.utils import (
-    new_agent_text_message,
-    new_task,
-)
-
-from agent import Agent
-
+from a2a.utils import new_task
 
 TERMINAL_STATES = {
-    TaskState.completed,
-    TaskState.canceled,
-    TaskState.failed,
-    TaskState.rejected
+    TaskState.completed, TaskState.canceled, TaskState.failed, TaskState.rejected,
 }
-
 
 class Executor(AgentExecutor):
     def __init__(self):
-        self.agents: dict[str, Agent] = {} # context_id to agent instance
+        self.agents: dict[str, object] = {}  # context_id -> Agent instance
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         msg = context.message
@@ -35,7 +22,11 @@ class Executor(AgentExecutor):
 
         task = context.current_task
         if task and task.status.state in TERMINAL_STATES:
-            raise ServerError(error=InvalidRequestError(message=f"Task {task.id} already processed (state: {task.status.state})"))
+            raise ServerError(
+                error=InvalidRequestError(
+                    message=f"Task {task.id} already processed (state: {task.status.state})"
+                )
+            )
 
         if not task:
             task = new_task(msg)
@@ -44,11 +35,11 @@ class Executor(AgentExecutor):
         context_id = task.context_id
         agent = self.agents.get(context_id)
         if not agent:
+            from agent import Agent
             agent = Agent()
             self.agents[context_id] = agent
 
         updater = TaskUpdater(event_queue, task.id, context_id)
-
         await updater.start_work()
         try:
             await agent.run(msg, updater)

@@ -1,7 +1,7 @@
 [project]
 name = "green-agent-template"
-version = "0.1.0"
-description = "A template for A2A green agents"
+version = "0.2.0"
+description = "A template for A2A green agents with enhanced ML capabilities"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -13,6 +13,8 @@ dependencies = [
     "pandas>=2.2.0",
     "numpy>=1.26.0",
     "lightgbm>=4.0.0",
+    "xgboost>=2.0.0",
+    "openai>=1.0.0",
 ]
 
 [project.optional-dependencies]

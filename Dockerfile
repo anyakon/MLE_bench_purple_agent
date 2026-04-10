@@ -1,16 +1,16 @@
 FROM ghcr.io/anyakon/mlebench-env:latest
 
-RUN conda create -n green python=3.11 -y
-COPY requirements.txt /tmp/green-requirements.txt
-RUN conda run -n green pip install -r /tmp/green-requirements.txt && \
-    conda run -n green pip install -e /mlebench
+# Install uv
+RUN pip install uv
 
-RUN mkdir cache && \
-    chown nonroot cache
+# Copy project files
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+COPY src/ ./src/
 
-COPY src /home/green/src
+# Install dependencies via uv
+RUN uv sync --frozen
 
 USER nonroot
-ENTRYPOINT ["/opt/conda/envs/green/bin/python", "/home/green/src/server.py"]
-CMD ["--host", "0.0.0.0"]
+ENTRYPOINT ["/bin/bash", "-lc", "cd /app && uv run src/server.py --host 0.0.0.0"]
 EXPOSE 9009
