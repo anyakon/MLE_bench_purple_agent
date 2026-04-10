@@ -36,7 +36,7 @@ class Agent:
         openai_model: Optional[str] = None,
     ):
         self.openai_api_key = openai_api_key
-        self.openai_model = openai_model or "gpt-5.1"
+        self.openai_model = openai_model or "gpt-5.4"
         self._ml_agent: Optional[MLAgent] = None
 
     def _extract_tar_bytes(self, msg: Message) -> bytes:

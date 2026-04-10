@@ -120,7 +120,7 @@ Available model names (use these exact strings):
 """
 
     # Default OpenAI model — set to the latest available
-    DEFAULT_MODEL = "gpt-5.1"
+    DEFAULT_MODEL = "gpt-5.4"
 
     def __init__(
         self,
@@ -356,6 +356,14 @@ class DataPreprocessor:
         # 5. Feature engineering
         train, test = self._feature_engineering(train, test, num_cols, cat_cols)
 
+        # Ensure train and test have exactly the same columns
+        for col in list(train.columns):
+            if col not in test.columns:
+                test[col] = 0
+        for col in list(test.columns):
+            if col not in train.columns:
+                train.drop(columns=[col], inplace=True)
+
         # Re-detect after engineering
         num_cols, cat_cols = self._classify_columns(train)
 
@@ -489,19 +497,62 @@ class DataPreprocessor:
         num_cols: list[str],
         cat_cols: list[str],
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """Add simple interaction / summary features."""
-        for df in (train, test):
-            # Count of missing values per row (across original columns that exist)
-            present_num = [c for c in num_cols if c in df.columns]
-            if len(present_num) > 3:
-                df["_n_above_median"] = sum(
-                    df[c] > df[c].median() for c in present_num
-                )
-            # Pairwise products of first few numeric cols (cap to avoid explosion)
-            few = present_num[:5]
-            for i in range(min(3, len(few))):
-                for j in range(i + 1, min(3, len(few))):
-                    df[f"{few[i]}_x_{few[j]}"] = df[few[i]] * df[few[j]]
+        """Advanced feature engineering for tabular data."""
+        # 1. Row-level statistics
+        present_num = [c for c in num_cols if c in train.columns]
+        if len(present_num) > 2:
+            train["_row_mean"] = train[present_num].mean(axis=1)
+            train["_row_std"] = train[present_num].std(axis=1)
+            train["_row_min"] = train[present_num].min(axis=1)
+            train["_row_max"] = train[present_num].max(axis=1)
+            train["_row_range"] = train["_row_max"] - train["_row_min"]
+            train["_row_skew"] = train[present_num].skew(axis=1)
+            train["_n_above_median"] = sum(
+                train[c] > train[c].median() for c in present_num[:10]
+            )
+            test["_row_mean"] = test[present_num].mean(axis=1)
+            test["_row_std"] = test[present_num].std(axis=1)
+            test["_row_min"] = test[present_num].min(axis=1)
+            test["_row_max"] = test[present_num].max(axis=1)
+            test["_row_range"] = test["_row_max"] - test["_row_min"]
+            test["_row_skew"] = test[present_num].skew(axis=1)
+            test["_n_above_median"] = sum(
+                test[c] > train[c].median() for c in present_num[:10]
+            )
+
+        # 2. Pairwise products of top numeric features (cap to avoid explosion)
+        few = present_num[:6]
+        for i in range(min(4, len(few))):
+            for j in range(i + 1, min(4, len(few))):
+                train[f"{few[i]}_x_{few[j]}"] = train[few[i]] * train[few[j]]
+                test[f"{few[i]}_x_{few[j]}"] = test[few[i]] * test[few[j]]
+
+        # 3. Squared terms for top numeric features
+        for c in present_num[:5]:
+            train[f"{c}_sq"] = train[c] ** 2
+            test[f"{c}_sq"] = test[c] ** 2
+
+        # 4. Binned versions of numeric features
+        for c in present_num[:4]:
+            try:
+                bins_train = pd.cut(train[c], bins=5, labels=False, duplicates="drop")
+                train[f"{c}_bin"] = bins_train
+                # Get bin edges from the result
+                cat_result = pd.cut(train[c], bins=5, duplicates="drop")
+                bin_edges = cat_result.cat.categories
+                test[f"{c}_bin"] = pd.cut(
+                    test[c], bins=bin_edges, labels=False, duplicates="drop"
+                ).fillna(-1).astype("Int64")
+            except Exception:
+                pass
+
+        # 5. Categorical interaction features
+        if len(cat_cols) >= 2:
+            combo = cat_cols[:3]
+            if all(c in train.columns for c in combo):
+                train["_cat_combo"] = train[combo].astype(str).agg("_".join, axis=1)
+                test["_cat_combo"] = test[combo].astype(str).agg("_".join, axis=1)
+
         return train, test
 
     def _encode_categoricals(
@@ -510,17 +561,34 @@ class DataPreprocessor:
         test: pd.DataFrame,
         cat_cols: list[str],
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """Label-encode categorical columns, handling unseen categories."""
+        """
+        Encode categorical columns using:
+        - Frequency encoding for high-cardinality (creates additional feature)
+        - Label encoding for all categoricals
+        """
+        self.freq_encodings: dict[str, dict] = {}
+
         for col in cat_cols:
-            le = LabelEncoder()
             train_vals = train[col].astype(str).fillna("missing")
             test_vals = test[col].astype(str).fillna("missing")
+            n_unique = train_vals.nunique()
+
+            if n_unique > 10:
+                # High-cardinality: add frequency encoding
+                freq = train_vals.value_counts(normalize=True).to_dict()
+                self.freq_encodings[col] = freq
+                train[f"{col}_freq"] = train_vals.map(freq).fillna(0.0).astype(np.float32)
+                test[f"{col}_freq"] = test_vals.map(freq).fillna(0.0).astype(np.float32)
+
+            # Label encoding
+            le = LabelEncoder()
             le.fit(train_vals)
             train[col] = le.transform(train_vals)
             test[col] = test_vals.apply(
                 lambda x: le.transform([str(x)])[0] if str(x) in le.classes_ else -1
             )
             self.label_encoders[col] = le
+
         return train, test
 
     def _scale_numerics(
@@ -844,6 +912,72 @@ class ModelTrainer:
         return KFold(n_splits=n_splits, shuffle=True, random_state=42)
 
     @classmethod
+    def _tune_lightgbm(cls, X_train, y_train, task_type, n_folds=5):
+        """Quick hyperparameter tuning for LightGBM."""
+        if not HAS_LIGHTGBM:
+            return None
+
+        from itertools import product
+
+        param_grid = {
+            "n_estimators": [200, 500],
+            "max_depth": [3, 5, 7],
+            "learning_rate": [0.01, 0.05, 0.1],
+            "num_leaves": [15, 31, 63],
+            "min_child_samples": [10, 20],
+            "reg_alpha": [0, 0.1],
+            "reg_lambda": [0, 0.1],
+        }
+
+        # Use a smaller grid for speed — random sample of 12 configs
+        keys = list(param_grid.keys())
+        values = list(param_grid.values())
+        all_combos = list(product(*values))
+        import random
+        random.seed(42)
+        candidates = random.sample(all_combos, min(12, len(all_combos)))
+
+        scoring = cls._scoring(task_type)
+        cv = cls._cv_split(task_type, y_train, n_splits=n_folds)
+        best_params = None
+        best_score = -np.inf
+
+        for combo in candidates:
+            params = dict(zip(keys, combo))
+            if "classification" in task_type:
+                model = lgb.LGBMClassifier(
+                    **params, random_state=42, verbose=-1, n_jobs=-1,
+                    force_col_wise=True,
+                )
+            else:
+                model = lgb.LGBMRegressor(
+                    **params, random_state=42, verbose=-1, n_jobs=-1,
+                    force_col_wise=True,
+                )
+            try:
+                scores = cross_val_score(model, X_train, y_train, cv=cv, scoring=scoring, n_jobs=-1)
+                mean_score = scores.mean()
+                if mean_score > best_score:
+                    best_score = mean_score
+                    best_params = params
+            except Exception:
+                continue
+
+        if best_params:
+            logger.info(f"LightGBM best params: {best_params} (CV={best_score:.4f})")
+            if "classification" in task_type:
+                return lgb.LGBMClassifier(
+                    **best_params, random_state=42, verbose=-1, n_jobs=-1,
+                    force_col_wise=True,
+                )
+            else:
+                return lgb.LGBMRegressor(
+                    **best_params, random_state=42, verbose=-1, n_jobs=-1,
+                    force_col_wise=True,
+                )
+        return None
+
+    @classmethod
     def select_best_model(
         cls,
         X_train: np.ndarray,
@@ -851,9 +985,11 @@ class ModelTrainer:
         task_type: str,
         candidate_names: list[str],
         n_folds: int = 5,
+        tune_top: bool = True,
     ) -> tuple[str, Any, float]:
         """
         Evaluate candidate models via cross-validation and return the best.
+        If tune_top=True, also tunes hyperparameters for LightGBM.
         Returns (name, fitted_model, cv_score).
         """
         cls._register_models()
@@ -862,7 +998,7 @@ class ModelTrainer:
 
         best_name = None
         best_model = None
-        best_score = -np.inf if "classification" in task_type or task_type == "regression" else np.inf
+        best_score = -np.inf
 
         # De-duplicate and filter to available
         seen = set()
@@ -880,25 +1016,25 @@ class ModelTrainer:
 
                 logger.info(f"Model {name}: CV {scoring} = {mean_score:.4f} (+/- {scores.std():.4f})")
 
-                if "classification" in task_type or task_type == "regression":
-                    if mean_score > best_score:
-                        best_score = mean_score
-                        best_name = name
-                else:
-                    if mean_score < best_score:
-                        best_score = mean_score
-                        best_name = name
+                if mean_score > best_score:
+                    best_score = mean_score
+                    best_name = name
             except Exception as exc:
                 logger.warning(f"Model {name} failed: {exc}")
                 continue
 
-        if best_name is None:
-            # Ultimate fallback
-            best_name = "gradient_boosting" if "classification" in task_type else "gradient_boosting_regressor"
-            best_model = cls.get_model(best_name, task_type)
-            best_model.fit(X_train, y_train)
-            best_score = 0.0
-        else:
+        # Hyperparameter tuning for LightGBM if it was the best candidate
+        if tune_top and best_name and "lightgbm" in best_name:
+            tuned = cls._tune_lightgbm(X_train, y_train, task_type, n_folds)
+            if tuned is not None:
+                tuned.fit(X_train, y_train)
+                best_model = tuned
+                best_name = "lightgbm_tuned"
+                logger.info("LightGBM tuned and retrained")
+
+        if best_model is None:
+            if best_name is None:
+                best_name = "gradient_boosting" if "classification" in task_type else "gradient_boosting_regressor"
             best_model = cls.get_model(best_name, task_type)
             best_model.fit(X_train, y_train)
 
