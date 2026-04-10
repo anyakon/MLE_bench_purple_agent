@@ -1,5 +1,4 @@
 import argparse
-import os
 import uvicorn
 
 from a2a.server.apps import A2AStarletteApplication
@@ -27,8 +26,8 @@ def main():
     skill = AgentSkill(
         id="mle-bench-ml-solver",
         name="ML Competition Solver",
-        description="Advanced ML competition solver with deep data analysis (EDA), automatic model selection, feature engineering, and ensemble modeling. Accepts competition.tar.gz with Kaggle-style ML tasks and returns predictions in submission.csv format. Uses LightGBM, Gradient Boosting, Random Forest, Extra Trees, Logistic Regression, KNN with weighted ensemble based on cross-validation scores.",
-        tags=["machine-learning", "kaggle", "autoML", "classification", "regression", "tabular-data", "mle-bench", "ensemble", "lightgbm", "feature-engineering"],
+        description="Automatically solves machine learning competitions from MLE-Bench. Accepts competition.tar.gz with Kaggle-style ML tasks (tabular, classification, regression) and returns predictions in submission.csv format. Uses AutoML-inspired approaches with Gradient Boosting, Random Forests, and intelligent feature engineering.",
+        tags=["machine-learning", "kaggle", "autoML", "classification", "regression", "tabular-data", "mle-bench"],
         examples=[
             """
             {
@@ -45,9 +44,9 @@ def main():
 
     agent_card = AgentCard(
         name="MLE-Bench Purple Agent",
-        description="Advanced ML engineering agent with deep EDA, automatic model selection, feature engineering, and ensemble modeling. Solves Kaggle competitions from MLE-Bench. Accepts competition data archives, analyzes task structure (classification/regression, imbalance, missing values), trains 6+ models (LightGBM, GradientBoosting, RandomForest, ExtraTrees, LogisticRegression, KNN), creates weighted ensemble based on cross-validation. Supports binary/multiclass classification and regression on tabular data.",
+        description="Machine Learning engineering agent that automatically solves Kaggle competitions from MLE-Bench. Accepts competition data archives, analyzes task structure, trains appropriate ML models (Gradient Boosting, Random Forests), and returns predictions in standard submission.csv format. Supports binary classification, multiclass classification, and regression tasks on tabular data.",
         url=args.card_url or f"http://{args.host}:{args.port}/",
-        version='2.0.0',
+        version='1.0.0',
         default_input_modes=['text', 'application/gzip'],
         default_output_modes=['text', 'text/csv'],
         capabilities=AgentCapabilities(streaming=True),

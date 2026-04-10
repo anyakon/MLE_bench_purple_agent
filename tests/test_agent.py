@@ -249,7 +249,7 @@ class TestTaskAnalyzer:
         assert task_info["task_type"] == "binary_classification"
         assert task_info["target_column"] == "target"
         assert task_info["id_column"] == "id"
-        assert "classification" in task_info["strategy"]
+        assert "gradient_boosting" in task_info["strategy"]
 
     def test_analyze_multiclass_classification(self, tmp_path):
         """Test analysis of multiclass classification task."""
