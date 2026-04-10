@@ -1,4 +1,4 @@
-FROM mlebench-env
+FROM ghcr.io/anyakon/mlebench-env:latest
 
 RUN conda create -n green python=3.11 -y
 COPY requirements.txt /tmp/green-requirements.txt
