@@ -120,7 +120,7 @@ Available model names (use these exact strings):
 """
 
     # Default OpenAI model — set to the latest available
-    DEFAULT_MODEL = "gpt-4.1"
+    DEFAULT_MODEL = "gpt-5.1"
 
     def __init__(
         self,
@@ -1018,10 +1018,21 @@ class ModelTrainer:
         logger.info(f"Best model: {model_name}")
 
         # Predict
+        is_bool_target = False
         if "classification" in task_type:
+            # Check if original target was boolean-like
+            if target_col and target_col in train_df.columns:
+                target_vals = train_df[target_col].dropna()
+                is_bool_target = target_vals.dtype == "bool" or set(target_vals.unique()).issubset({True, False, "True", "False"})
+
             if task_type == "binary_classification":
                 if hasattr(model, "predict_proba"):
-                    predictions = model.predict_proba(X_test)[:, 1]
+                    proba = model.predict_proba(X_test)[:, 1]
+                    # For boolean targets, return 0/1 classes not probabilities
+                    if is_bool_target:
+                        predictions = (proba >= 0.5).astype(int)
+                    else:
+                        predictions = proba
                 else:
                     predictions = model.predict(X_test)
             else:

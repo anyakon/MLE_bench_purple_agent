@@ -28,7 +28,7 @@ def main():
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to bind")
     parser.add_argument("--port", type=int, default=9009, help="Port to bind")
     parser.add_argument("--card-url", type=str, help="URL to advertise in agent card")
-    parser.add_argument("--openai-model", type=str, default="gpt-4.1", help="OpenAI model name")
+    parser.add_argument("--openai-model", type=str, default="gpt-5.1", help="OpenAI model name")
     args = parser.parse_args()
 
     skill = AgentSkill(
