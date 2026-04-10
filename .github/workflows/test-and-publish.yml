@@ -34,6 +34,16 @@ jobs:
             type=semver,pattern={{major}}
             type=raw,value=latest,enable={{is_default_branch}}
 
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull base image
+        run: docker pull --platform linux/amd64 ghcr.io/anyakon/mlebench-env:latest
+
       - name: Build Docker image
         uses: docker/build-push-action@v5
         with:
@@ -46,10 +56,12 @@ jobs:
 
       - name: Start agent container
         env:
-            SECRETS_JSON: ${{ toJson(secrets) }}
+            OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          echo "$SECRETS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' > .env
-          docker run -d -p 9009:9009 --name agent-container --env-file .env $(echo "${{ steps.meta.outputs.tags }}" | head -n1) --host 0.0.0.0 --port 9009
+          docker run -d -p 9009:9009 --name agent-container \
+            -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+            $(echo "${{ steps.meta.outputs.tags }}" | head -n1) \
+            --host 0.0.0.0 --port 9009
           timeout 30 bash -c 'until curl -sf http://localhost:9009/.well-known/agent-card.json > /dev/null; do sleep 1; done'
 
       - name: Set up uv
