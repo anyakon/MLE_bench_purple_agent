@@ -1072,10 +1072,13 @@ class ModelTrainer:
             return fallback
 
         class AveragedPredictor:
-            def __init__(self, models, task_type, is_bool_target=False):
+            def __init__(self, models, task_type, y_train):
                 self.models = models
                 self.task_type = task_type
-                self.is_bool_target = is_bool_target
+                # Detect boolean target from training labels
+                unique = set(np.unique(y_train))
+                self.is_bool_target = (task_type == "binary_classification" and
+                    unique.issubset({0, 1, 0.0, 1.0, True, False}))
 
             def predict(self, X):
                 preds = []
@@ -1089,7 +1092,7 @@ class ModelTrainer:
                     result = (result >= 0.5).astype(int)
                 return result
 
-        return AveragedPredictor(trained_models, task_type, is_bool_target)
+        return AveragedPredictor(trained_models, task_type, y_train)
 
     @classmethod
     def build_ensemble(
