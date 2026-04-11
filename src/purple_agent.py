@@ -1072,9 +1072,10 @@ class ModelTrainer:
             return fallback
 
         class AveragedPredictor:
-            def __init__(self, models, task_type):
+            def __init__(self, models, task_type, is_bool_target=False):
                 self.models = models
                 self.task_type = task_type
+                self.is_bool_target = is_bool_target
 
             def predict(self, X):
                 preds = []
@@ -1083,9 +1084,12 @@ class ModelTrainer:
                         preds.append(m.predict_proba(X)[:, 1])
                     else:
                         preds.append(m.predict(X))
-                return np.mean(preds, axis=0)
+                result = np.mean(preds, axis=0)
+                if self.is_bool_target:
+                    result = (result >= 0.5).astype(int)
+                return result
 
-        return AveragedPredictor(trained_models, task_type)
+        return AveragedPredictor(trained_models, task_type, is_bool_target)
 
     @classmethod
     def build_ensemble(
@@ -1205,10 +1209,19 @@ class ModelTrainer:
         logger.info(f"Best model: {model_name}")
 
         # Predict
+        is_bool_target = False
+        if "classification" in task_type and target_col and target_col in train_df.columns:
+            target_vals = train_df[target_col].dropna()
+            is_bool_target = target_vals.dtype == "bool" or set(target_vals.unique()).issubset({True, False, "True", "False"})
+
         if "classification" in task_type:
             if task_type == "binary_classification":
                 if hasattr(model, "predict_proba"):
-                    predictions = model.predict_proba(X_test)[:, 1]
+                    proba = model.predict_proba(X_test)[:, 1]
+                    if is_bool_target:
+                        predictions = (proba >= 0.5).astype(int)
+                    else:
+                        predictions = proba
                 else:
                     predictions = model.predict(X_test)
             else:
