@@ -1041,6 +1041,53 @@ class ModelTrainer:
         return best_name, best_model, best_score
 
     @classmethod
+    def _average_predictions(
+        cls,
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        X_test: np.ndarray,
+        task_type: str,
+        candidate_names: list[str],
+        n_folds: int = 5,
+    ) -> Any:
+        """
+        Train top models independently and average their predictions.
+        Returns a wrapper object with a predict() method returning averaged results.
+        """
+        cls._register_models()
+        trained_models = []
+
+        for name in candidate_names:
+            try:
+                model = cls.get_model(name, task_type)
+                model.fit(X_train, y_train)
+                trained_models.append((name, model))
+                logger.info(f"Model averaging: trained {name}")
+            except Exception as exc:
+                logger.warning(f"Model {name} failed during averaging: {exc}")
+
+        if not trained_models:
+            fallback = cls.get_model(candidate_names[0] if candidate_names else "random_forest", task_type)
+            fallback.fit(X_train, y_train)
+            return fallback
+
+        class AveragedPredictor:
+            def __init__(self, models, task_type):
+                self.models = models
+                self.task_type = task_type
+
+            def predict(self, X):
+                preds = []
+                for name, m in self.models:
+                    if hasattr(m, "predict_proba") and self.task_type == "binary_classification":
+                        preds.append(m.predict_proba(X)[:, 1])
+                    else:
+                        preds.append(m.predict(X))
+                return np.mean(preds, axis=0)
+
+        return AveragedPredictor(trained_models, task_type)
+
+    @classmethod
     def build_ensemble(
         cls,
         X_train: np.ndarray,
@@ -1146,6 +1193,10 @@ class ModelTrainer:
         if use_ensemble and len(candidate_names) >= 2:
             model = cls.build_ensemble(X_train, y_train, task_type, candidate_names[:5])
             model_name = "stacking_ensemble"
+        elif task_type == "binary_classification" and len(candidate_names) >= 3:
+            # Model averaging: train top models independently and average predictions
+            model = cls._average_predictions(X_train, y_train, X_test, task_type, candidate_names[:3], n_folds)
+            model_name = "model_averaging"
         else:
             model_name, model, _ = cls.select_best_model(
                 X_train, y_train, task_type, candidate_names, n_folds=n_folds,
@@ -1154,21 +1205,10 @@ class ModelTrainer:
         logger.info(f"Best model: {model_name}")
 
         # Predict
-        is_bool_target = False
         if "classification" in task_type:
-            # Check if original target was boolean-like
-            if target_col and target_col in train_df.columns:
-                target_vals = train_df[target_col].dropna()
-                is_bool_target = target_vals.dtype == "bool" or set(target_vals.unique()).issubset({True, False, "True", "False"})
-
             if task_type == "binary_classification":
                 if hasattr(model, "predict_proba"):
-                    proba = model.predict_proba(X_test)[:, 1]
-                    # For boolean targets, return 0/1 classes not probabilities
-                    if is_bool_target:
-                        predictions = (proba >= 0.5).astype(int)
-                    else:
-                        predictions = proba
+                    predictions = model.predict_proba(X_test)[:, 1]
                 else:
                     predictions = model.predict(X_test)
             else:
