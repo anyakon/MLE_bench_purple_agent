@@ -1,87 +1,61 @@
-# A2A Agent Template
+# MLE-Bench Purple Agent
 
-A minimal template for building [A2A (Agent-to-Agent)](https://a2a-protocol.org/latest/) green agents compatible with the [AgentBeats](https://agentbeats.dev) platform.
+Автоматизированный ML-агент (purple), который решает соревнования MLE-Bench/Kaggle — принимает архив `competition.tar.gz`, анализирует данные, обучает ансамбль моделей и возвращает `submission.csv` с предсказаниями.
 
-## Project Structure
+## Архитектура
+
+Проект состоит из двух агентов, взаимодействующих по протоколу **A2A (Agent-to-Agent)**:
+
+### Purple Agent (`src/purple_agent.py`)
+
+Агент-решатель ML-задач. Реализует полный пайплайн:
+
+1. **Извлечение данных** — распаковка `competition.tar.gz` во временную директорию.
+2. **Глубокий анализ данных (`TaskAnalyzer`)** — определение типа задачи (бинарная/мультиклассовая классификация, регрессия), анализ пропусков, распределений, корреляций, дисбаланса классов, текстовых признаков, высокой кардинальности категориальных колонок.
+3. **Конструирование признаков (`FeatureEngineer`)** — импутация пропусков (медиана для числовых, мода для категориальных), one-hot кодирование для низкокардинальных признаков, меточное кодирование для высококардинальных, генерация взаимодействий признаков, масштабирование (RobustScaler).
+4. **Фабрика моделей (`ModelFactory`)** — автоподбор моделей в зависимости от типа задачи и характеристик данных: LightGBM, GradientBoosting, RandomForest, ExtraTrees, LogisticRegression/Ridge, KNN.
+5. **Ансамблирование (`EnsembleTrainer`)** — кросс-валидация каждой модели, взвешенное усреднение предсказаний на основе кросс-валидационной оценки.
+6. **Генерация файла предсказаний** — возврат `submission.csv` с предсказаниями для тестовых данных.
+
+### Green Agent (`src/agent.py`)
+
+Агент-оценщик. Управляет процессом оценки:
+
+- Получает `competition_id` от платформы AgentBeats.
+- Скачивает и подготавливает данные соревнования через `mlebench`.
+- Упаковывает публичные данные в `competition.tar.gz` и отправляет purple-агенту.
+- Обрабатывает **двунаправленный диалог**: если purple-агент запрашивает валидацию submission, green-агент проверяет её через `validate_submission`.
+- По финалу оценивает результат через `grade_csv` и возвращает скор платформе.
+
+## Взаимодействие
+
+```
+AgentBeats → Green Agent → (tar.gz) → Purple Agent → submission.csv → Green Agent → Grade → AgentBeats
+```
+
+Обмен данными идёт по протоколу A2A через HTTP: green-агент отправляет файл `competition.tar.gz` в сообщении, purple-агент возвращает артефакт с `submission.csv`.
+
+## Структура
 
 ```
 src/
-├─ server.py      # Server setup and agent card configuration
-├─ executor.py    # A2A request handling
-├─ agent.py       # Your agent implementation goes here
-└─ messenger.py   # A2A messaging utilities
+├── purple_agent.py    # Purple-агент: анализ данных, конструирование признаков, модели, ансамбль
+├── agent.py           # Green-агент: оркестрация, валидация, оценка
+├── server.py          # A2A сервер, карточка агента
+├── executor.py        # Обработчик A2A запросов
+└── messenger.py       # Утилиты A2A обмена сообщениями
 tests/
-└─ test_agent.py  # Agent tests
-Dockerfile        # Docker configuration
-pyproject.toml    # Python dependencies
-.github/
-└─ workflows/
-   └─ test-and-publish.yml # CI workflow
+└── test_agent.py      # Проверка соответствия A2A + модульные тесты purple-агента
 ```
 
-## Getting Started
+## Тесты
 
-1. **Create your repository** - Click "Use this template" to create your own repository from this template
-
-2. **Implement your agent** - Add your agent logic to [`src/agent.py`](src/agent.py)
-
-3. **Configure your agent card** - Fill in your agent's metadata (name, skills, description) in [`src/server.py`](src/server.py)
-
-4. **Write your tests** - Add custom tests for your agent in [`tests/test_agent.py`](tests/test_agent.py)
-
-For a concrete example of implementing a green agent using this template, see this [draft PR](https://github.com/RDI-Foundation/green-agent-template/pull/3).
-
-## Running Locally
+- **Проверка соответствия A2A** — валидация карточки агента, проверка формата сообщений и событий.
+- **Модульные тесты Purple Agent** — тестирование `TaskAnalyzer` (бинарная/мультикласс/регрессия, поиск файлов, описание), `ModelTrainer` (обучение на синтетических данных с категориальными и пропущенными значениями), `PurpleAgent` (извлечение tar.gz, создание файла предсказаний, полный пайплайн решения, очистка временных файлов).
 
 ```bash
-# Install dependencies
-uv sync
-
-# Run the server
-uv run src/server.py
-```
-
-## Running with Docker
-
-```bash
-# Build the image
-docker build -t my-agent .
-
-# Run the container
-docker run -p 9009:9009 my-agent
-```
-
-## Testing
-
-Run A2A conformance tests against your agent.
-
-```bash
-# Install test dependencies
 uv sync --extra test
-
-# Start your agent (uv or docker; see above)
-
-# Run tests against your running agent URL
-uv run pytest --agent-url http://localhost:9009
+uv run src/server.py                     # запустить агента
+uv run pytest --agent-url http://localhost:9009  # conformance-тесты
+uv run pytest tests/test_agent.py        # unit-тесты purple-агента
 ```
-
-## Publishing
-
-The repository includes a GitHub Actions workflow that automatically builds, tests, and publishes a Docker image of your agent to GitHub Container Registry.
-
-If your agent needs API keys or other secrets, add them in Settings → Secrets and variables → Actions → Repository secrets. They'll be available as environment variables during CI tests.
-
-- **Push to `main`** → publishes `latest` tag:
-```
-ghcr.io/<your-username>/<your-repo-name>:latest
-```
-
-- **Create a git tag** (e.g. `git tag v1.0.0 && git push origin v1.0.0`) → publishes version tags:
-```
-ghcr.io/<your-username>/<your-repo-name>:1.0.0
-ghcr.io/<your-username>/<your-repo-name>:1
-```
-
-Once the workflow completes, find your Docker image in the Packages section (right sidebar of your repository). Configure the package visibility in package settings.
-
-> **Note:** Organization repositories may need package write permissions enabled manually (Settings → Actions → General). Version tags must follow [semantic versioning](https://semver.org/) (e.g., `v1.0.0`).
